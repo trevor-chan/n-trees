@@ -273,8 +273,9 @@ def calc_merges(adjacency_list, n=2, maxiter = 1000000, temp=0.25):
     return merged
 
 
-def merge_forest(forest, adjacency_list, temp=0.25, maxiter=1000000):
+def merge_forest(forest, temp=0.25, maxiter=1000000):
     n = np.amax(forest)//forest.shape[0]
+    adjacency_list = calc_adjacency_list(forest)
     merged = calc_merges(adjacency_list, n=n, temp=temp, maxiter=maxiter)
     if merged == 0:
         return 0
