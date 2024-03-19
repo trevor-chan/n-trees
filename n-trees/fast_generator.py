@@ -80,7 +80,7 @@ def find_available(array, n=1):
 
 
 @njit
-def plant_trees(d, n, maxiter = 1000000):
+def plant_trees(d, n, maxiter = 1000000, suppress_print=True):
     trees = np.zeros((d,d), dtype=np.uint8)
     count = 0
     while np.sum(trees) < n*d and count < maxiter:
@@ -99,11 +99,15 @@ def plant_trees(d, n, maxiter = 1000000):
             trees[opens_list[i][0], opens_list[i][1]] = 1
         count += 1
 
+    if not suppress_print:
+        if count < maxiter:
+            print(f'completed in {count} iterations')
+        else:
+            print(f'exited early after {count} iterations')
     if count < maxiter:
-        print(f'completed in {count} iterations')
+        return trees
     else:
-        print(f'exited early after {count} iterations')
-    return trees
+        return np.zeros_like(trees)
 
 
 # Generation of roots
@@ -217,7 +221,7 @@ def bfs(adj_mat, start=0):
 
 # @njit(parallel=True)
 @njit
-def calc_merges(adj_mat, n=2, temp=1, maxiter = 1000000):
+def calc_merges(adj_mat, n=2, temp=1, maxiter = 1000000, suppress_print=True):
     done = 0
     count = 0
     merged = []
@@ -251,17 +255,21 @@ def calc_merges(adj_mat, n=2, temp=1, maxiter = 1000000):
             
         
     merged = [[indices[i:i+n] + 1] for i in range(0, d, n)]
+    if not suppress_print:
+        if done:
+            print(f'merge pattern found after {count} iterations, temp = {int(temp_sweep*1000)}e-3')
+        else:
+            print(f'exited early after {count} iterations')
     if done:
-        print(f'merge pattern found after {count} iterations, temp = {int(temp_sweep*1000)}e-3')
+        return merged
     else:
-        print(f'exited early after {count} iterations')
-    return merged
+        return np.zeros_like(merged)
 
 @njit
-def merge_roots(roots, temp=1, maxiter=1000000):
+def merge_roots(roots, temp=1, maxiter=1000000, suppress_print=True):
     n = np.amax(roots)//roots.shape[0]
     adj_mat = adj_mat_from_roots(roots)
-    merged = calc_merges(adj_mat, n=n, temp=temp, maxiter=maxiter)
+    merged = calc_merges(adj_mat, n=n, temp=temp, maxiter=maxiter, suppress_print=suppress_print)
     new_roots = np.zeros(roots.shape, dtype=np.int64)
     for i,merge in enumerate(merged):
         for j in range(n):
@@ -271,12 +279,40 @@ def merge_roots(roots, temp=1, maxiter=1000000):
 
 # Generating a forest:
 
-def generate_forest(d, n, temp=1, maxiter=1000000):
-    trees = plant_trees(d, n, maxiter=maxiter)
-    roots = generate_singular_roots(trees)
-    roots = merge_roots(roots, temp=temp, maxiter=maxiter)
-    forest = np.stack((trees, roots))
+def is_valid_forest(forest):
+    trees = forest[0]
+    roots = forest[1]
+    if not np.any(trees):
+        return False
+    if not np.any(roots):
+        return False
+    return True
+
+
+def generate_forest(d, n, temp=1, maxiter=1000000, suppress_print=True):
+    done = False
+    tree_count = 0
+    root_count = 0
+    while not done:
+        trees = plant_trees(d, n, maxiter=maxiter, suppress_print=suppress_print)
+        if not np.any(trees):
+            tree_count += 1
+            if tree_count > 100:
+                print('Tree generation failed for 100 consecutive attempts, you may want to reevaluate your parameters')
+                return 0
+            continue
+        roots = generate_singular_roots(trees)
+        if n > 1:
+            roots = merge_roots(roots, temp=temp, maxiter=maxiter, suppress_print=suppress_print)
+        forest = np.stack((trees, roots))
+        if is_valid_forest(forest):
+            done = True
+        root_count += 1
+        if root_count > 100:
+            print('Merging failed for 100 consecutive attempts, you may want to reevaluate your parameters')
+            return 0
     return forest
+        
 
 # Plotting a forest:
 
