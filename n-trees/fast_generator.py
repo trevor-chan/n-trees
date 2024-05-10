@@ -263,7 +263,17 @@ def calc_merges(adj_mat, n=2, temp=1, maxiter = 1000000, suppress_print=True):
     if done:
         return merged
     else:
-        return np.zeros_like(merged)
+        return [[np.array((0,0))] for i in range(0, d, n)]
+    
+    
+    
+# New, more efficient merging algorithm: perform an initial merge, keep track of regions that are merged with <n, >n, and =n regions
+# Then, for each region that is merged with <n regions, check if it is adjacent with any of the >n regions. If so, swap one tree from >n to <n, and reindex
+# Repeat until no more optimal swaps are possible
+# If no optimal swaps are possible, then perform a random perturbation: swap a tree from either <n or >n with an =n region, and reindex
+# repeat steps above until <n and >n lists are empty, or until maxiter is reached
+
+
 
 @njit
 def merge_roots(roots, temp=1, maxiter=1000000, suppress_print=True):
@@ -302,8 +312,7 @@ def generate_forest(d, n, temp=1, maxiter=1000000, suppress_print=True):
                 return 0
             continue
         roots = generate_singular_roots(trees)
-        if n > 1:
-            roots = merge_roots(roots, temp=temp, maxiter=maxiter, suppress_print=suppress_print)
+        roots = merge_roots(roots, temp=temp, maxiter=maxiter, suppress_print=suppress_print)
         forest = np.stack((trees, roots))
         if is_valid_forest(forest):
             done = True
