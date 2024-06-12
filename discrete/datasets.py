@@ -11,11 +11,12 @@ import tqdm
 
 
 class ForestDataset(Dataset):
-    def __init__(self, d, n, temp=1, maxiter=1000000, size=10000):
+    def __init__(self, d=0, n=0, temp=1, maxiter=1000000, size=10000, conditional=False):
         self.d = d
         self.n = n
         self.temp = temp
         self.maxiter = maxiter
+        self.conditional = conditional
         
         self.forests = self.__generate_data(size)
         self.size = size
@@ -49,6 +50,7 @@ class ForestDataset(Dataset):
         dataset.n = source['n']
         dataset.temp = source['temp']
         dataset.maxiter = source['maxiter']
+        dataset.conditional = source['conditional']
         dataset.size = source['size']
         dataset.data_std = source['data_std']
         dataset.data_p = source['data_p']
@@ -66,13 +68,19 @@ class ForestDataset(Dataset):
         
         roots_one_hot = torch.nn.functional.one_hot(sample[1]-1, num_classes=self.d).permute(2, 0, 1)
         trees = sample[0].to(torch.float32) * 2 - 1
+        roots_one_hot = roots_one_hot * 2 - 1
         roots_one_hot = roots_one_hot.to(torch.float32)
         return trees, roots_one_hot
 
     def __getitem__(self, index):
         forest = self.forests[index]
         trees, roots_one_hot = self.__augment(forest)
-        return trees, roots_one_hot
+        trees = trees.unsqueeze(0)
+        if not self.conditional:
+            sample = torch.cat((trees, roots_one_hot), dim=0)
+            return sample
+        else:
+            return trees, roots_one_hot
 
 
 class InfiniteSampler(torch.utils.data.Sampler):

@@ -14,6 +14,7 @@ def simple_training_loop(
     network             = None,     # Options for model and preconditioning.
     loss                = None,     # Options for loss function.
     optimizer           = None,     # Options for optimizer.
+    # conditional         = False,    # Conditional training.
     seed                = 0,        # Global random seed.
     batch_size          = 512,      # Total batch size for one training iteration.
     num_workers         = 4,        # Number of data loading workers.
@@ -70,13 +71,17 @@ def simple_training_loop(
         # Accumulate gradients.
         optimizer.zero_grad(set_to_none=True)
         
-        data, prior = next(dataset_iterator)
-        data = data.to(device).to(torch.float32)
-        prior = prior.to(device).to(torch.float32)
-        # loss = loss_fn(net=net, data=data)
-        loss = loss_fn(net=net, data=data, prior=prior)
-        running_loss.append(loss)
+        if dataset.conditional:
+            data, prior = next(dataset_iterator)
+            data = data.to(device).to(torch.float32)
+            prior = prior.to(device).to(torch.float32)
+            loss = loss_fn(net=net, data=data, prior=prior)
+        else:
+            data = next(dataset_iterator)
+            data = data.to(device).to(torch.float32)
+            loss = loss_fn(net=net, data=data)
         loss.sum().backward()
+        running_loss.append(loss.cpu())
 
         # Update weights.
         for param in net.parameters():

@@ -24,7 +24,7 @@ class EntropyLoss:
         self.P_factor = P_factor # P_factor test ranges from 10 to 50, hyperparameter controls sampling bias during training
 
     def __call__(self, net, data):
-        rnd_normal = torch.randn([data.shape[0],1,1], device=data.device) * 1
+        rnd_normal = torch.randn([data.shape[0],1,1,1], device=data.device) * 1
         p = rnd_normal.exp()
         p = (p / self.P_factor).clamp(0, 1) / 2 # clamp flip probability to [0,0.5]
         
@@ -43,24 +43,26 @@ class ConditionalEntropyLoss:
         self.P_factor = P_factor # P_factor test ranges from 10 to 50, hyperparameter controls sampling bias during training
 
     def __call__(self, net, data, prior):
-        rnd_normal = torch.randn([data.shape[0],1,1], device=data.device) * 1
-        p = rnd_normal.exp()
-        p = (p / self.P_factor).clamp(0, 1) / 2 # clamp flip probability to [0,0.5]
         
+        # # clamped log normal distribution
+        # rnd_normal = torch.randn([data.shape[0],1,1], device=data.device) * 1
+        # p = rnd_normal.exp()
+        # p = (p / self.P_factor).clamp(0, 1) / 2 # clamp flip probability to [0,0.5]
+        
+        # # beta distribution
         # beta = torch.distributions.beta.Beta(1.3, 4)
         # p = beta.sample([data.shape[0],1,1]).to(device=data.device) / 2
         
+        # uniform distribution
+        p = torch.rand([data.shape[0],1,1,1], device=data.device) / 2
         
-        weight = 1 / (2 * p) # weight for loss function for balancing preconditioning loss potentially not needed
+        weight = 1 / (2 * p) # Weight loss biased towards low temperatures, formerly 1 / (2 * p)
         y = data
         n = torch.bernoulli(torch.ones_like(y) * (1 - p)) * 2 - 1 # noise equal to a bit flip occuring with probability p
         n = n.to(torch.float32)
         D_yn = net(y * n, prior, p)
         loss = weight * ((D_yn - y) ** 2)
         return loss
-    
-    # No preconditioning required for the entropy loss function, as inputs and outputs are always scaled to [-1, 1]
-
 
 
 # Sample weighting during training...

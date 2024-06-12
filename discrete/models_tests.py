@@ -64,18 +64,14 @@ class EntropyPrecond(torch.nn.Module):
 
     def forward(self, x, p):
         x = x.to(torch.float32)
-        x = x.flatten(start_dim=1)
+        x = x.flatten(start_dim=2)
         p = p.to(torch.float32).reshape(-1, 1, 1, 1)
-        dtype = torch.float16 if (self.use_fp16 and not force_fp32 and x.device.type == 'cuda') else torch.float32
-        
-        # # Why would I need to precondition if it's just -1s and 1s?
-        # Still probably need a weighting function for the loss though
-        
+        dtype = torch.float16 if (self.use_fp16 and not force_fp32 and x.device.type == 'cuda') else torch.float32        
         c_noise = torch.log(2 * p) / 2 + 1  # empirical scaling factor
         F_x = self.model(x.to(dtype), c_noise.flatten())
         assert F_x.dtype == dtype
         D_x = F_x.to(torch.float32)  # took out the skip connection, possibly important
-        D_x = D_x.reshape(-1, self.d, self.d)
+        D_x = D_x.reshape(-1, self.d + 1, self.d, self.d)
         return D_x
     
     
@@ -101,7 +97,7 @@ class ConditionalEntropyPrecond(torch.nn.Module):
 
     def forward(self, x, prior, p):
         x = x.to(torch.float32)
-        x = x.flatten(start_dim=1)
+        x = x.flatten(start_dim=2)
         
         # -------------------------------------------------------------------------
         # Prior dimensionality should flatten along the sequence dimension, but preserve the onehot encoding dimension
@@ -118,7 +114,7 @@ class ConditionalEntropyPrecond(torch.nn.Module):
         F_x = self.model(x.to(dtype), prior.to(dtype), c_noise.flatten())
         assert F_x.dtype == dtype
         D_x = F_x.to(torch.float32)  # took out the skip connection, possibly important
-        D_x = D_x.reshape(-1, self.d, self.d)
+        D_x = D_x.reshape(-1, 1, self.d, self.d)
         return D_x
 
 
@@ -149,15 +145,15 @@ class FourierEmbedding(torch.nn.Module):
         return x
     
     
-class TestingConditionalAttention(torch.nn.Module):
+class ConditionalAttention(torch.nn.Module):
     def __init__(self,
         n,                                  # Image resolution at input/output.
         d,                                  # Number of color channels at input.
         dropout             = 0.10,         # Dropout probability of intermediate activations.
-        num_heads           = 8,            # Number of layers in the MLP.
+        num_heads           = 16,            # Number of layers in the MLP.
         model_dimension     = 512,          # Transformer encoder dimension
-        num_encoder_layers  = 8,            # Transformer layers
-        embedding_type      = 'positional', # Timestep embedding type: 'positional' or 'fourier'
+        num_encoder_layers  = 6,            # Transformer layers
+        embedding_type      = 'fourier', # Timestep embedding type: 'positional' or 'fourier'
         embedding_channels  = 128,          # Number of channels in the timestep embedding.
         activation          = torch.nn.SiLU(),         # Activation function
     ):
@@ -166,7 +162,7 @@ class TestingConditionalAttention(torch.nn.Module):
         assert embedding_type in ['fourier', 'positional']
         # init = dict(init_mode='xavier_uniform')
         self.sequence_dimension = int(d * d)
-        self.prior_dimension = int(d * d * d)
+        self.vector_dimension = int(d + 1)
         self.embedding_dimension = embedding_channels
         self.num_encoder_layers = num_encoder_layers
         self.dropout = dropout
@@ -178,8 +174,8 @@ class TestingConditionalAttention(torch.nn.Module):
         
         self.map_inputs = torch.nn.Sequential(
             torch.nn.Dropout(self.dropout),
-            torch.nn.Linear(in_features = self.sequence_dimension + self.prior_dimension + self.embedding_dimension, out_features = self.sequence_dimension * self.model_dimension),
-            torch.nn.LayerNorm(self.model_dimension * self.sequence_dimension),
+            torch.nn.Linear(in_features = self.vector_dimension + self.embedding_dimension, out_features = self.model_dimension),
+            torch.nn.LayerNorm(self.model_dimension),
             self.activation,
         )
         
@@ -193,21 +189,83 @@ class TestingConditionalAttention(torch.nn.Module):
 
         self.map_output = torch.nn.Sequential(
             torch.nn.Dropout(self.dropout),
-            torch.nn.Linear(in_features=self.model_dimension * self.sequence_dimension, out_features=self.model_dimension * self.sequence_dimension),
-            torch.nn.LayerNorm(self.model_dimension * self.sequence_dimension),
+            torch.nn.Linear(in_features=self.model_dimension, out_features=self.model_dimension),
+            torch.nn.LayerNorm(self.model_dimension),
             self.activation,
             torch.nn.Dropout(self.dropout),
-            torch.nn.Linear(in_features=self.model_dimension * self.sequence_dimension, out_features=self.sequence_dimension),
+            torch.nn.Linear(in_features=self.model_dimension, out_features=1),
             torch.nn.Tanh(),
         )
 
-    def forward(self, x, prior, p):
-        emb = self.embed(p)
-        x = torch.cat((torch.cat((x.unsqueeze(1), prior), dim=1).flatten(start_dim=1), emb), dim=1)
+    def forward(self, x, prior, p):        
+        emb = self.embed(p).unsqueeze(-1).repeat(1, 1, self.sequence_dimension)
+        x = torch.cat((x, prior, emb), dim=1)
+        x = x.permute(0, 2, 1)
         x = self.map_inputs(x)
-        x = x.reshape(-1, self.sequence_dimension, self.model_dimension) # Reshape to (batch, sequence_dim=d*d, model_dimension)
         x = self.transformer_encoder(x)
-        x = x.reshape(-1, self.sequence_dimension * self.model_dimension)
         x = self.map_output(x)
-        # x = x.reshape((-1, self.sequence_dimension)) 
+        x = x.permute(0, 2, 1)
+        return x    
+    
+    
+class Attention(torch.nn.Module):
+    def __init__(self,
+        n,                                  # Image resolution at input/output.
+        d,                                  # Number of color channels at input.
+        dropout             = 0.10,         # Dropout probability of intermediate activations.
+        num_heads           = 8,            # Number of layers in the MLP.
+        model_dimension     = 512,          # Transformer encoder dimension
+        num_encoder_layers  = 8,            # Transformer layers
+        embedding_type      = 'fourier',    # Timestep embedding type: 'positional' or 'fourier'
+        embedding_channels  = 128,          # Number of channels in the timestep embedding.
+        activation          = torch.nn.SiLU(),         # Activation function
+    ):
+        super().__init__()
+        
+        assert embedding_type in ['fourier', 'positional']
+        # init = dict(init_mode='xavier_uniform')
+        self.sequence_dimension = int(d * d)
+        self.vector_dimension = int(d + 1)
+        self.embedding_dimension = embedding_channels
+        self.num_encoder_layers = num_encoder_layers
+        self.dropout = dropout
+        self.activation = activation
+        self.model_dimension = model_dimension
+        
+        #mapping inputs
+        self.embed = PositionalEmbedding(num_channels=embedding_channels, endpoint=True) if embedding_type == 'positional' else FourierEmbedding(num_channels=embedding_channels)
+        
+        self.map_inputs = torch.nn.Sequential(
+            torch.nn.Dropout(self.dropout),
+            torch.nn.Linear(in_features = self.vector_dimension + self.embedding_dimension, out_features = self.model_dimension),
+            torch.nn.LayerNorm(self.model_dimension),
+            self.activation,
+        )
+        
+        # --------------------------------------------------------------------------------------------------------------------------------------------------
+        # Encoder layer and transformer encoder generally requires a shape of:
+        # (batch, sequence_dimension, model_dimension) with memory scaling quadratically in the sequence dimension
+        # This equates to (batch, d*d, model_dimension) for a d*d grid, where the model_dimension is roughly on the order of d^3 (d*d*d+d+embedding_dimension)
+        encoder_layer = torch.nn.TransformerEncoderLayer(d_model=self.model_dimension, nhead=num_heads, dropout=dropout, batch_first=True)
+        self.transformer_encoder = torch.nn.TransformerEncoder(encoder_layer, num_layers=num_encoder_layers)
+        # --------------------------------------------------------------------------------------------------------------------------------------------------
+
+        self.map_output = torch.nn.Sequential(
+            torch.nn.Dropout(self.dropout),
+            torch.nn.Linear(in_features=self.model_dimension, out_features=self.model_dimension),
+            torch.nn.LayerNorm(self.model_dimension),
+            self.activation,
+            torch.nn.Dropout(self.dropout),
+            torch.nn.Linear(in_features=self.model_dimension, out_features=self.vector_dimension),
+            torch.nn.Tanh(),
+        )
+
+    def forward(self, x, p):
+        emb = self.embed(p).unsqueeze(-1).repeat(1, 1, self.sequence_dimension)
+        x = torch.cat((x.flatten(start_dim=2), emb), dim=1)
+        x = x.permute(0, 2, 1)
+        x = self.map_inputs(x)
+        x = self.transformer_encoder(x)
+        x = self.map_output(x)
+        x = x.permute(0, 2, 1)
         return x
